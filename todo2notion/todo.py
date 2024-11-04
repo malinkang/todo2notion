@@ -11,8 +11,9 @@ import mistletoe
 from notion_helper import NotionHelper
 from notion_renderer import NotionPyRenderer
 import requests
-import utils
 from dotenv import load_dotenv
+
+from todo2notion import utils
 
 load_dotenv()
 
@@ -27,7 +28,7 @@ def get_token(client_id, client_secret, code, redirect_uri):
         "redirect_uri": redirect_uri,
         "scope": "tasks:write tasks:read",
     }
-    response = requests.post(url, data=data)
+    response = session.post(url, data=data)
 
     if response.status_code == 200:
         token = response.json()["access_token"]
@@ -40,7 +41,7 @@ def get_token(client_id, client_secret, code, redirect_uri):
 def get_user_projects(access_token):
     url = "https://api.ticktick.com/open/v1/project"
     headers = {"Authorization": "Bearer " + access_token}
-    response = requests.get(url, headers=headers)
+    response = session.get(url, headers=headers)
 
     if response.status_code == 200:
         projects = response.json()
@@ -51,17 +52,23 @@ def get_user_projects(access_token):
 
 
 headers = {
-    "authority": "api.dida365.com",
-    "accept": "application/json, text/plain, */*",
-    "accept-language": "zh-CN,zh;q=0.9",
-    "cache-control": "no-cache",
-    "content-type": "application/json;charset=UTF-8",
-    "hl": "zh_CN",
-    "origin": "https://dida365.com",
-    "pragma": "no-cache",
-    "referer": "https://dida365.com/",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
-    "x-tz": "Asia/Shanghai",
+    'accept': 'application/json, text/plain, */*',
+    'accept-language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+    'hl': 'zh_CN',
+    'origin': 'https://dida365.com',
+    'priority': 'u=1, i',
+    'referer': 'https://dida365.com/',
+    'sec-ch-ua': '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"macOS"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-site',
+    'traceid': '6721a893b8de3a0431a1548c',
+    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'x-csrftoken': 'GpesKselqEa9oKJQRM3bj8tkdT2kJVNSNaZ9eM0i3Q-1730258339',
+    'x-device': '{"platform":"web","os":"macOS 10.15.7","device":"Chrome 130.0.0.0","name":"","version":6101,"id":"6721a59761bd871d7ba24b96","channel":"website","campaign":"","websocket":"6721a7eab8de3a0431a153ae"}',
+    'x-tz': 'Asia/Shanghai',
 }
 
 
@@ -80,18 +87,9 @@ def is_task_modified(item):
     return True
 
 
-def is_tomato_modified(item):
-    id = item.get("id")
-    tomato = tomato_dict.get(id)
-    if tomato:
-        task_id = utils.get_property_value(tomato.get("properties").get("任务id"))
-        note = utils.get_property_value(tomato.get("properties").get("笔记"))
-        if task_id == item.get("task_id") and note == item.get("note"):
-            return False
-    return True
 
-
-def is_project_modified(item):
+def is_project_modified(item,project_dict):
+    """根据最后修改时间判断是否被修改了"""
     id = item.get("id")
     if item.get("modifiedTime") is None:
         return True
@@ -106,14 +104,14 @@ def is_project_modified(item):
     return True
 
 
-def get_projects():
+def get_projects(session,project_dict):
     """获取所有清单"""
-    r = requests.get("https://api.dida365.com/api/v2/projects", headers=headers)
+    r = session.get("https://api.dida365.com/api/v2/projects", headers=headers)
     if r.ok:
         # 获取映射关系
         d = notion_helper.get_property_type(notion_helper.project_database_id)
         items = r.json()
-        items = list(filter(is_project_modified, items))
+        items = list(filter(lambda item: is_project_modified(item, project_dict), items))
         for item in items:
             emoji, title = utils.split_emoji_from_string(item.get("name"))
             id = item.get("id")
@@ -143,28 +141,6 @@ def get_projects():
         print(f" Get projects failed ${r.text}")
 
 
-def get_habits():
-    """获取所有清单"""
-    response = requests.get("https://api.dida365.com/api/v2/habits", headers=headers)
-    print(response.text)
-    with open("habits.json", "w") as f:
-        f.write(json.dumps(response.json(), indent=4, ensure_ascii=False))
-    print(response.status_code)
-
-
-
-def get_completed():
-    """获取所有清单"""
-    response = requests.get(
-        "https://api.dida365.com/api/v2/project/605be9f41207118e943acb64/completed/?from=&to=2024-04-21%2002:15:50&limit=50",
-        headers=headers,
-    )
-    print(response.text)
-    with open("task.json", "w") as f:
-        f.write(json.dumps(response.json(), indent=4, ensure_ascii=False))
-    print(response.status_code)
-
-
 def remove_duplicates(data):
     seen_ids = set()
     unique_data = []
@@ -175,87 +151,13 @@ def remove_duplicates(data):
     return unique_data
 
 
-def get_pomodoros():
-    result = []
-    to = None
-    while True:
-        url = "https://api.dida365.com/api/v2/pomodoros/timeline"
-        if to:
-            url += f"?to={to}"
-        r = requests.get(
-            url=url,
-            headers=headers,
-        )
-        if r.ok:
-            l = r.json()
-            if len(l) == 0:
-                break
-            result.extend(l)
-            completedTime = l[-1].get("startTime")
-            to = pendulum.parse(completedTime).int_timestamp * 1000
-            # with open("pomodoros.json", "w") as f:
-            #     f.write(json.dumps(l, indent=4, ensure_ascii=False))
-            # break
-        else:
-            print(f"获取任务失败 {r.text}")
-    results = remove_duplicates(result)
-    # 处理result
-    for result in results:
-        if result.get("tasks"):
-            tasks = [
-                item
-                for item in result.get("tasks")
-                if item.get("taskId") and item.get("title")
-            ]
-            if len(tasks):
-                result["title"] = tasks[0].get("title")
-                result["task_id"] = tasks[0].get("taskId")
-    return results
-
-
-def insert_tamato():
-    d = notion_helper.get_property_type(notion_helper.tomato_database_id)
-    items = get_pomodoros()
-    items = list(filter(is_tomato_modified, items))
-    for index, item in enumerate(items):
-        print(f"一共{len(items)}个，当前是第{index+1}个")
-        id = item.get("id")
-        tomato = {
-            "标题": item.get("title"),
-            "id": id,
-            "开始时间": utils.parse_date(item.get("startTime")),
-            "结束时间": utils.parse_date(item.get("endTime")),
-        }
-        if item.get("note"):
-            tomato["笔记"] = item.get("note")
-        if item.get("task_id") and item.get("task_id") in todo_dict:
-            tomato["任务"] = [todo_dict.get(item.get("task_id")).get("id")]
-        if item.get("task_id") and item.get("task_id"):
-            tomato["任务id"] = item.get("task_id")
-        properties = utils.get_properties(tomato, d)
-        notion_helper.get_date_relation(properties, pendulum.parse(item.get("endTime")))
-        parent = {
-            "database_id": notion_helper.tomato_database_id,
-            "type": "database_id",
-        }
-        icon = {"type": "emoji", "emoji": "🍅"}
-        if id in tomato_dict:
-            notion_helper.update_page(
-                page_id=tomato_dict.get(id).get("id"),
-                properties=properties,
-                icon=icon,
-            )
-        else:
-            notion_helper.create_page(parent=parent, properties=properties, icon=icon)
-
-
-def get_all_completed():
+def get_all_completed(session):
     """获取所有完成的任务"""
     date = pendulum.now()
     result = []
     while True:
         to = date.format("YYYY-MM-DD HH:mm:ss")
-        r = requests.get(
+        r = session.get(
             f"https://api.dida365.com/api/v2/project/all/completedInAll/?from=&to={to}&limit=100",
             headers=headers,
         )
@@ -272,9 +174,9 @@ def get_all_completed():
     return result
 
 
-def get_all_task():
-    """获取所有"""
-    r = requests.get("https://api.dida365.com/api/v2/batch/check/0", headers=headers)
+def get_all_task(session):
+    """获取所有未完成的任务"""
+    r = session.get("https://api.dida365.com/api/v2/batch/check/0", headers=headers)
     results = []
     if r.ok:
         results.extend(r.json().get("syncTaskBean").get("update"))
@@ -283,15 +185,14 @@ def get_all_task():
     return results
 
 
-def get_task():
+def get_task(session):
     """获取所有清单"""
-    results = get_all_completed()
-    results = []
-    results.extend(get_all_task())
-    add_task_to_notion(results)
+    results = get_all_completed(session)
+    results.extend(get_all_task(session))
+    return results
 
 
-def add_task_to_notion(items, page_id=None):
+def add_task_to_notion(items,project_dict,todo_dict,config, page_id=None):
     d = notion_helper.get_property_type(notion_helper.todo_database_id)
     items = list(filter(is_task_modified, items))
     for index, item in enumerate(items):
@@ -303,12 +204,16 @@ def add_task_to_notion(items, page_id=None):
             task["清单"] = [project_dict.get(item.get("projectId")).get("id")]
         if item.get("startDate"):
             task["开始时间"] = utils.parse_date(item.get("startDate"))
+            task["time"] = item.get("startDate")
         if item.get("dueDate"):
             task["结束时间"] = utils.parse_date(item.get("dueDate"))
         if item.get("modifiedTime"):
             task["最后修改时间"] = utils.parse_date(item.get("modifiedTime"))
         if item.get("progress"):
             task["进度"] = item.get("progress") / 100
+        persons = [x for x in notion_helper.client.users.list().get("results")  if x.get("type")=="person"]
+        if persons:
+            task["Assignee"] = persons
         if item.get("tags"):
             task["标签"] = [
                 notion_helper.get_relation_id(
@@ -321,55 +226,111 @@ def add_task_to_notion(items, page_id=None):
             "type": "database_id",
         }
         icon = "https://www.notion.so/icons/circle_outline_green.svg"
-        properties = utils.get_properties(task, d)
+        properties = {}
         if item.get("completedTime"):
             task["状态"] = "Done"
             task["完成时间"] = utils.parse_date(item.get("completedTime"))
+            task["time"] = item.get("completedTime")
             icon = "https://www.notion.so/icons/checkmark_circle_green.svg"
-            properties = utils.get_properties(task, d)
+        notion_helper.get_all_relation(properties)
+        if task.get("time"):
             notion_helper.get_date_relation(
-                properties, pendulum.parse(item.get("completedTime"))
+                properties, pendulum.parse(task.get("time"))
             )
+        blocks = []
         if id in todo_dict:
-            result = notion_helper.update_page(
-                page_id=todo_dict.get(id).get("id"),
-                properties=properties,
-                icon=utils.get_icon(icon),
-            )
-        else:
-            result = notion_helper.create_page(
-                parent=parent, properties=properties, icon=utils.get_icon(icon)
-            )
-            todo_dict[id] = result
+            notes= utils.get_property_value(todo_dict.get(id).get("properties").get("笔记"))
+            if notes:
+                task["笔记"] = [x.get("id") for x in notes]
+            for note in notes:
+                blocks.extend(notion_helper.get_block_children(note.get("id")))
+            notion_helper.delete_block(todo_dict.get(id).get("id"))
+        properties = utils.get_properties(task, d)
+        result = notion_helper.create_page(
+            parent=parent, properties=properties, icon=utils.get_icon(icon)
+        )
+        todo_dict[id] = result
         if item.get("content"):
-            add_content(result.get("id"), item.get("content"))
+            blocks = convert_to_block(id, item.get("projectId"), item.get("content"),config) + blocks
+        if blocks:
+            append_block(result.get("id"),blocks)
         if item.get("items"):
             add_task_to_notion(item.get("items"), result.get("id"))
 
 
-def add_content(page_id, content):
-    print(f"content = {content}")
-    l = mistletoe.markdown(content, NotionPyRenderer)
-    notion_helper = NotionHelper()
-    r = notion_helper.client.blocks.children.append(block_id=page_id, children=l)
+def convert_to_block(id,project_id, content,config):
+    blocks = mistletoe.markdown(content, NotionPyRenderer)
+    is_upload = config["上传图片到Github"]
+    if not is_upload:
+        blocks = [block for block in blocks if block.get("type") != "image"]
+        return blocks
+    for block in blocks:
+        if(block.get("type")=="image"):
+            url = block.get("image").get("external").get("url")
+            urls = url.split("/")
+            dir = urls[0]
+            file_name = urls[1] 
+            url = f"https://api.dida365.com/api/v1/attachment/{project_id}/{id}/{dir}?action=download"
+            response = session.get(url, headers=headers)
+            if response.status_code == 200:
+                file_path = os.path.join("images", dir, file_name)  # 组合完整文件路径
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)  # 创建目录
+                with open(file_path, 'wb') as file:
+                    file.write(response.content)
+                print("文件下载成功")
+                image_url = f"https://raw.githubusercontent.com/{os.getenv('REPOSITORY')}/{os.getenv('REF').split('/')[-1]}/{file_path}"
+                block["image"]["external"]["url"] = image_url
+            else:
+                print(f"文件下载失败，状态码: {response.status_code}")
+    return blocks
+
+def append_block(block_id, blocks):
+    for block in blocks:
+        children = None
+        if block.get("children"):
+            children = block.pop("children")
+        id = notion_helper.client.blocks.children.append(block_id=block_id, children=[block]).get("results")[0].get("id")
+        if children:
+            append_block(id,children)
+
+def login(username, password):
+    session = requests.Session()
+    login_url = "https://api.dida365.com/api/v2/user/signon?wc=true&remember=true"
+    payload = {
+        "username": username,
+        "password": password
+    }
+    response = session.post(login_url, json=payload, headers=headers)
+    
+    if response.status_code == 200:
+        print("登录成功")
+        return session
+    else:
+        print(f"登录失败，状态码: {response.status_code}")
+        return None
 
 
-if __name__ == "__main__":
-    headers["cookie"] = os.getenv("COOKIE")
-    parser = argparse.ArgumentParser()
-    notion_helper = NotionHelper()
+
+def main():
+    config = notion_helper.config
+    username = config.get("滴答清单账号")
+    password = config.get("滴答清单密码")
+    session = login(username,password)
     projects = notion_helper.query_all(notion_helper.project_database_id)
     project_dict = {}
     for item in projects:
         project_dict[utils.get_property_value(item.get("properties").get("id"))] = item
-    get_projects()
+    get_projects(session,project_dict)
     todos = notion_helper.query_all(notion_helper.todo_database_id)
     todo_dict = {}
     for todo in todos:
         todo_dict[utils.get_property_value(todo.get("properties").get("id"))] = todo
-    get_task()
-    tomatos = notion_helper.query_all(notion_helper.tomato_database_id)
-    tomato_dict = {}
-    for tomato in tomatos:
-        tomato_dict[utils.get_property_value(tomato.get("properties").get("id"))] = tomato
-    insert_tamato()
+    tasks = get_task(session)
+    add_task_to_notion(tasks,project_dict,todo_dict,config)
+
+
+notion_helper = NotionHelper()
+if __name__ == "__main__":
+    main()
+
+

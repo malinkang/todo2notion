@@ -5,7 +5,6 @@ import hashlib
 import os
 import re
 import requests
-import base64
 import emoji
 from config import (
     RICH_TEXT,
@@ -177,7 +176,7 @@ def get_first_and_last_day_of_week(date):
     )
 
     # 获取给定日期所在周的最后一天（星期日）
-    last_day_of_week = first_day_of_week + timedelta(days=6)
+    last_day_of_week = first_day_of_week + timedelta(days=7) 
 
     return first_day_of_week, last_day_of_week
 
@@ -224,6 +223,8 @@ def get_properties(dict1, dict2):
             property = {"multi_select": [{"name": name} for name in value]}
         elif type == RELATION:
             property = {"relation": [{"id": id} for id in value]}
+        elif type =="people":
+            property = {"people": [{"id": item.get("id"),"object":item.get("object")} for item in value]}
         if property:
             properties[key] = property
     return properties
@@ -302,28 +303,6 @@ def str_to_timestamp(date):
     # 获取时间戳
     return int(dt.timestamp())
 
-upload_url = 'https://wereadassets.malinkang.com/'
-
-
-def upload_image(folder_path, filename,file_path):
-    # 将文件内容编码为Base64
-    with open(file_path, 'rb') as file:
-        content_base64 = base64.b64encode(file.read()).decode('utf-8')
-
-    # 构建请求的JSON数据
-    data = {
-        'file': content_base64,
-        'filename': filename,
-        'folder': folder_path
-    }
-
-    response = requests.post(upload_url, json=data)
-
-    if response.status_code == 200:
-        print('File uploaded successfully.')
-        return response.text
-    else:
-        return None
 
 def url_to_md5(url):
     # 创建一个md5哈希对象
@@ -363,10 +342,6 @@ def download_image(url, save_dir="cover"):
     else:
         print(f"Failed to download image. Status code: {response.status_code}")
     return save_path
-
-def upload_cover(url):
-    cover_file = download_image(url)
-    return upload_image("cover",f"{cover_file.split('/')[-1]}",cover_file)
 
 def parse_date(date_str):
         # get_task()

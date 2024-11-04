@@ -10,7 +10,7 @@
 ## 使用
 
 > [!IMPORTANT]  
-> 关注公众号回复Keep获取教程
+> 关注公众号回复滴答清单获取教程
 
 ![扫码_搜索联合传播样式-标准色版](https://github.com/malinkang/weread2notion-pro/assets/3365208/32fbce17-9a03-4e36-9a39-6e6a34aa3aef)
 

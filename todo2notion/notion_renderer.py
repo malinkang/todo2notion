@@ -84,21 +84,8 @@ class NotionPyRenderer(BaseRenderer):
         @returns {tuple} (str, dict[])
         """
 
-        def toString(renderedBlock):
-            if isinstance(renderedBlock, dict) and renderedBlock["type"] == "rich_text":
-                return renderedBlock[
-                    "title"
-                ]  # This unwraps TextBlocks/paragraphs to use in other blocks
-            else:  # Returns str as-is or returns blocks we can't convert
-                return renderedBlock
-
-        # print(f"renderMultipleToString renderedBlock = {self.renderMultiple(tokens)}")
-        # Try to convert any objects to strings
-        rendered = [toString(b) for b in self.renderMultiple(tokens)]
-        strs = "".join([s for s in rendered if isinstance(s, str)])
-        blocks = [b for b in rendered if isinstance(b, dict)]
-        # Return a tuple of strings and any extra blocks we couldn't convert
-        return (strs, blocks)
+        blocks = self.renderMultiple(tokens)
+        return blocks
 
     def renderMultipleToStringAndCombine(self, tokens, toBlockFunc):
         """
@@ -108,17 +95,10 @@ class NotionPyRenderer(BaseRenderer):
         @param {function} toBlockFunc Takes a str and returns a dict for the created
         @returns {dict[]}
         """
-        strs, blocks = self.renderMultipleToString(tokens)
-        # print(f"strs = {strs} blocks = {blocks}")
+        blocks = self.renderMultipleToString(tokens)
         ret = []
-        # if strs:  # If a non-empty string block
-        #     ret = ret + [toBlockFunc(strs)]
-
-        # print(f"toBlockFunc = {toBlockFunc}")
-        # print(f"strs = {strs} blocks = {blocks} {toBlockFunc(blocks)}")
-        if blocks:
-            ret = ret + [toBlockFunc(blocks)]
-        # print(f"renderMultipleToStringAndCombine = {ret}")
+        for block in blocks:
+            ret = ret + [toBlockFunc(block)]
         return ret
 
     def render_document(self, token):
@@ -217,15 +197,19 @@ class NotionPyRenderer(BaseRenderer):
 
         def blockFunc(blockStr):
             return {
-                "type": CodeBlock,
-                "language": matchLang,
-                "title_plaintext": blockStr,
+                "type": "code",
+                "code": {
+                    "caption": [],
+                    "rich_text": [blockStr],
+                    "language": matchLang.lower(),
+                },
             }
 
         return self.renderMultipleToStringAndCombine(token.children, blockFunc)
 
     def render_thematic_break(self, token):
-        return {"type": "divider","divider":{}}
+        return {"type": "divider", "divider": {}}
+
     def render_heading(self, token):
         level = token.level
         if level > 3:
@@ -236,27 +220,28 @@ class NotionPyRenderer(BaseRenderer):
             type = ["heading_1", "heading_2", "heading_3"][level - 1]
             return {
                 "type": type,
-                type: {"rich_text": blockStr},
+                type: {"rich_text": [blockStr]},
             }
 
         return self.renderMultipleToStringAndCombine(token.children, blockFunc)
 
     def render_quote(self, token):
         def blockFunc(blockStr):
-            return {"type": "quote", "quote": blockStr[0].pop("paragraph")}
+            return {"type": "quote", "quote": blockStr.pop("paragraph")}
 
         return self.renderMultipleToStringAndCombine(token.children, blockFunc)
 
     def render_paragraph(self, token):
         def blockFunc(blockStr):
-            if(blockStr[0].get("type")=="text"):
+            if blockStr and blockStr.get("type") == "text":
                 return {
                     "type": "paragraph",
-                    "paragraph": {"rich_text": blockStr},
+                    "paragraph": {"rich_text": [blockStr]},
                 }
             return blockStr
 
-        return self.renderMultipleToStringAndCombine(token.children, blockFunc)
+        result = self.renderMultipleToStringAndCombine(token.children, blockFunc)
+        return result
 
     def render_list(self, token):
         # List items themselves are each blocks, so skip it and directly render
@@ -268,18 +253,24 @@ class NotionPyRenderer(BaseRenderer):
         # to render out all the nodes and sort through them to find the string
         # for this item and any children
         rendered = self.renderMultiple(token.children)
-
-        if len(rendered)==0:
+        rich_text = []
+        children = []
+        for item in rendered:
+            if item.get("type")=="paragraph":
+                rich_text.extend(item.get("paragraph").get("rich_text"))
+            else:
+                children.append(item)
+        if len(rendered) == 0:
             return None
         strings = [
             s["text"]["content"]
             for s in rendered[0]["paragraph"]["rich_text"]
             if s["type"] == "text"
         ]
-        if re.match(r'\d', token.leader): #Contains a number
+        if re.match(r"\d", token.leader):  # Contains a number
             return {
-                'type': "numbered_list_item",
-                "numbered_list_item":rendered[0].pop("paragraph")
+                "type": "numbered_list_item",
+                "numbered_list_item": {"rich_text": rich_text},
             }
         strContent = "".join(strings)
         match = re.match(r"^\[([x ])\][ \t]", strContent, re.I)
@@ -289,12 +280,14 @@ class NotionPyRenderer(BaseRenderer):
             ]
             return {
                 "type": "to_do",
-                "to_do": rendered[0].pop("paragraph"),
+                "to_do": {"rich_text": rich_text},
             }
         result = {
             "type": "bulleted_list_item",
-            "bulleted_list_item": rendered[0].pop("paragraph"),
+            "bulleted_list_item": {"rich_text": rich_text},
         }
+        if children:
+            result["children"] = children
         return result
 
     def render_table(self, token):
@@ -362,45 +355,44 @@ class NotionPyRenderer(BaseRenderer):
     # MD-like formatting
     def render_strong(self, token):
         def blockFunc(blockStr):
-            for i in blockStr:
-                i["annotations"]["bold"] = True
+            blockStr["annotations"]["bold"] = True
             return blockStr
 
         return self.renderMultipleToStringAndCombine(token.children, blockFunc)
 
     def render_emphasis(self, token):
         def blockFunc(blockStr):
-            for i in blockStr:
-                i["annotations"]["italic"] = True
+            blockStr["annotations"]["italic"] = True
             return blockStr
 
         return self.renderMultipleToStringAndCombine(token.children, blockFunc)
 
     def render_inline_code(self, token):
         def blockFunc(blockStr):
-            for i in blockStr:
-                i["annotations"]["code"] = True
+            blockStr["annotations"]["code"] = True
             return blockStr
 
         return self.renderMultipleToStringAndCombine(token.children, blockFunc)
 
     def render_raw_text(self, token):
-        if(token.content.startswith("~")and token.content.endswith("~")):
-            return {"type": "text", "text": {"content": token.content[1:-1]}, "annotations": {"underline": True}}
+        if token.content.startswith("~") and token.content.endswith("~"):
+            return {
+                "type": "text",
+                "text": {"content": token.content[1:-1]},
+                "annotations": {"underline": True},
+            }
         return {"type": "text", "text": {"content": token.content}, "annotations": {}}
 
     def render_strikethrough(self, token):
         def blockFunc(blockStr):
-            for i in blockStr:
-                i["annotations"]["strikethrough"] = True
+            blockStr["annotations"]["strikethrough"] = True
             return blockStr
 
         return self.renderMultipleToStringAndCombine(token.children, blockFunc)
 
     def render_link(self, token):
         def blockFunc(blockStr):
-            for i in blockStr:
-                i["text"]["link"] = {"url": token.target}
+            blockStr["text"]["link"] = {"url": token.target}
             return blockStr
 
         return self.renderMultipleToStringAndCombine(token.children, blockFunc)
@@ -410,16 +402,18 @@ class NotionPyRenderer(BaseRenderer):
         return self.renderMultipleToStringAndCombine(token.children, lambda s: f"\\{s}")
 
     def render_line_break(self, token):
-        return "\n"
+        return {"type": "text", "text": {"content": ""}}
 
     def render_image(self, token):
-        # Alt text
-        alt = token.title or self.renderMultipleToString(token.children)[0]
-        #暂时不支持图片
         return {
             "object": "block",
             "type": "image",
-            "image": {"type": "external", "external": {"url": "https://images.unsplash.com/photo-1537727365640-d9b9cbeeac34?w=800&auto=format&fit=crop&q=60&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxleHBsb3JlLWZlZWR8MTl8fHxlbnwwfHx8fHw%3D"}},
+            "image": {
+                "type": "external",
+                "external": {
+                    "url": token.src
+                },
+            },
         }
 
     class __HTMLParser(HTMLParser):

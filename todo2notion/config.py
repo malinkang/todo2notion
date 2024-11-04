@@ -1,0 +1,12 @@
+
+RICH_TEXT = "rich_text"
+URL = "url"
+RELATION = "relation"
+NUMBER = "number"
+DATE = "date"
+FILES = "files"
+STATUS = "status"
+TITLE = "title"
+SELECT = "select"
+MULTI_SELECT = "multi_select"
+TZ = "Asia/Shanghai"

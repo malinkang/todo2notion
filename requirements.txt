@@ -5,3 +5,5 @@ retrying
 pendulum
 python-dotenv
 emoji
+mistletoe
+todo2notion

@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    version="0.0.1",
+    version="0.1.3",
     packages=find_packages(),
     install_requires=[
         "requests",
@@ -16,7 +16,7 @@ setup(
     entry_points={
         "console_scripts": [
             "todo = todo2notion.todo:main",
-            "heatmap = todo2notion.update_heatmap:main",
+            "update_heatmap = todo2notion.update_heatmap:main",
         ],
     },
     author="malinkang",

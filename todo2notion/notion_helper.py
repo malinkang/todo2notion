@@ -277,7 +277,6 @@ class NotionHelper:
         )
 
     def get_date_relation(self, properties, date):
-        date = date + timedelta(hours=8)
         properties["年"] = get_relation(
             [
                 self.get_year_relation_id(date),

@@ -6,7 +6,7 @@ import os
 import re
 import requests
 import emoji
-from config import (
+from todo2notion.config import (
     RICH_TEXT,
     URL,
     RELATION,

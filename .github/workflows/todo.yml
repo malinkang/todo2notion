@@ -57,4 +57,4 @@ jobs:
           git push || echo "nothing to push"
       - name: udpate heatmap 
         run: |
-            update_heatmap
+            python scripts/test.py

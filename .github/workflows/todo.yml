@@ -31,7 +31,7 @@ jobs:
           pip install -r requirements.txt
       - name: todo sync
         run: |
-          python scripts/test.py
+          python script/test.py
       - name: Remove folder
         run: rm -rf ./OUT_FOLDER
       - name: Set default year if not provided

@@ -31,7 +31,7 @@ jobs:
           pip install -r requirements.txt
       - name: todo sync
         run: |
-          todo
+          python scripts/test.py
       - name: Remove folder
         run: rm -rf ./OUT_FOLDER
       - name: Set default year if not provided
@@ -55,6 +55,6 @@ jobs:
           git add .
           git commit -m 'add new heatmap' || echo "nothing to commit"
           git push || echo "nothing to push"
-      - name: udpate heatmap 
-        run: |
-            python scripts/test.py
+      # - name: udpate heatmap 
+      #   run: |
+      #       python scripts/test.py

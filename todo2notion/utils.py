@@ -4,6 +4,7 @@ from datetime import timedelta
 import hashlib
 import os
 import re
+import time
 import requests
 import emoji
 from todo2notion.config import (
@@ -24,6 +25,13 @@ import pendulum
 MAX_LENGTH = (
     1024  # NOTION 2000个字符限制https://developers.notion.com/reference/request-limits
 )
+
+
+def log_request_duration(action, start_time):
+    duration = time.time() - start_time
+    minutes = int(duration // 60)
+    seconds = duration - minutes * 60
+    print(f"{action}结束,耗时{minutes}分{seconds:.2f}秒")
 
 
 def get_heading(level, content):
@@ -333,7 +341,11 @@ def download_image(url, save_dir="cover"):
         print(f"File {file_name} already exists. Skipping download.")
         return save_path
 
+    action = f"下载图片 {url}"
+    print(f"开始{action}")
+    start_time = time.time()
     response = requests.get(url, stream=True)
+    log_request_duration(action, start_time)
     if response.status_code == 200:
         with open(save_path, "wb") as file:
             for chunk in response.iter_content(chunk_size=128):

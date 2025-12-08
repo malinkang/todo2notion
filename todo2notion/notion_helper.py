@@ -1,3 +1,4 @@
+import io
 import logging
 import os
 import re
@@ -19,7 +20,11 @@ from todo2notion.utils import (
     get_property_value
 )
 from dotenv import load_dotenv
+from urllib.parse import unquote, urlparse
 
+import requests
+from notion_client import Client
+from retrying import retry
 load_dotenv()
 TAG_ICON_URL = "https://www.notion.so/icons/tag_gray.svg"
 USER_ICON_URL = "https://www.notion.so/icons/user-circle-filled_gray.svg"
@@ -28,63 +33,21 @@ BOOKMARK_ICON_URL = "https://www.notion.so/icons/bookmark_gray.svg"
 
 
 class NotionHelper:
-    database_name_dict = {
-        "TODO_DATABASE_NAME": "任务",
-        "SETTING_DATABASE_NAME": "设置",
-    }
     database_id_dict = {}
-    todo_heatmap_block_id = None
-    tomato_heatmap_block_id = None
+    todo_heatmap_block_id = os.getenv("HEATMAP_BLOCK_ID")
     property_dict = {}
     def __init__(self):
         self.client = Client(auth=os.getenv("NOTION_TOKEN"), log_level=logging.ERROR)
         self.__cache = {}
-        self.page_id = self.extract_page_id(os.getenv("NOTION_PAGE"))
-        self.search_database(self.page_id)
-        for key in self.database_name_dict.keys():
-            if os.getenv(key) != None and os.getenv(key) != "":
-                self.database_name_dict[key] = os.getenv(key)
-        self.todo_database_id = self.database_id_dict.get(
-            self.database_name_dict.get("TODO_DATABASE_NAME")
-        )     
-        self.setting_database_id = self.database_id_dict.get(
-            self.database_name_dict.get("SETTING_DATABASE_NAME")
-        )   
-        r = self.client.databases.retrieve(database_id=self.todo_database_id)
-        for key,value in r.get("properties").items():
-            self.property_dict[key] = value
-        self.project_database_id = self.get_relation_database_id(self.property_dict.get("清单"))
-        self.tag_database_id = self.get_relation_database_id(self.property_dict.get("标签"))
-        self.day_database_id = self.get_relation_database_id(self.property_dict.get("日"))
-        self.week_database_id = self.get_relation_database_id(self.property_dict.get("周"))
-        self.month_database_id = self.get_relation_database_id(self.property_dict.get("月"))
-        self.year_database_id = self.get_relation_database_id(self.property_dict.get("年"))
-        self.all_database_id = self.get_relation_database_id(self.property_dict.get("全部"))
-        if self.day_database_id:
-            self.write_database_id(self.day_database_id)
-        self.config = self.query_setting_data()
-   
-            
-    
-    def query_setting_data(self):
-        """从设置数据库中查询标题为设置的数据"""
-        result = {}
-        query_filter = {
-            "property": "标题",
-            "title": {
-                "equals": "设置"
-            }
-        }
-        response = self.client.databases.query(
-            database_id=self.setting_database_id,
-            filter=query_filter
-        )
-        results = response.get("results")
-        if results:
-            for key,value in results[0].get("properties").items():
-               result[key] = get_property_value(value)
-        return result
-    
+        self.todo_database_id = os.getenv("TASK_DATABASE_ID")
+        self.project_database_id = os.getenv("LIST_DATABASE_ID")
+        self.tag_database_id = os.getenv("TAG_DATABASE_ID")
+        self.day_database_id = os.getenv("DAY_DATABASE_ID")
+        self.week_database_id = os.getenv("WEEK_DATABASE_ID")
+        self.month_database_id = os.getenv("MONTH_DATABASE_ID")
+        self.year_database_id = os.getenv("YEAR_DATABASE_ID")
+        self.all_database_id = os.getenv("ALL_DATABASE_ID")
+              
     def get_property_type(self,database_id):
         """获取一个database的property和类型的映射关系"""
         result = {}
@@ -109,27 +72,6 @@ class NotionHelper:
             return match.group(0)
         else:
             raise Exception(f"获取NotionID失败，请检查输入的Url是否正确")
-
-    def search_database(self, block_id):
-        children = self.client.blocks.children.list(block_id=block_id)["results"]
-        # 遍历子块
-        for child in children:
-            # 检查子块的类型
-
-            if child["type"] == "child_database":
-                self.database_id_dict[child.get("child_database").get("title")] = (
-                    child.get("id")
-                )
-            elif child["type"] == "embed" and child.get("embed").get("url"):
-                url =    child.get("embed").get("url")
-                if url.startswith("https://heatmap.malinkang.com/"):
-                    if("/tomato/" in url):
-                        self.tomato_heatmap_block_id = child.get("id")
-                    else:
-                        self.todo_heatmap_block_id = child.get("id")
-            # 如果子块有子块，递归调用函数
-            if "has_children" in child and child["has_children"]:
-                self.search_database(child["id"])
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def update_heatmap(self, block_id, url):

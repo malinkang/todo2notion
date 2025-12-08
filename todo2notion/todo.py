@@ -2,8 +2,11 @@
 # -*- coding: UTF-8 -*-
 import argparse
 import json
+import math
+import mimetypes
 import os
 import time
+from urllib.parse import unquote, urlparse
 
 import pendulum
 from todo2notion.notion_helper import NotionHelper, TAG_ICON_URL
@@ -35,6 +38,7 @@ headers = {
     "x-csrftoken": "GpesKselqEa9oKJQRM3bj8tkdT2kJVNSNaZ9eM0i3Q-1730258339",
     "x-device": '{"platform":"web","os":"macOS 10.15.7","device":"Chrome 141.0.0.0","name":"","version":6101,"id":"689e9fa68d521b4a0abec2cb","channel":"website","campaign":"","websocket":""}',
     "x-tz": "Asia/Shanghai",
+    "cookie":os.getenv("COOKIE")
 }
 
 
@@ -88,7 +92,10 @@ def is_project_modified(item, project_dict):
 
 def get_projects(session, project_dict):
     """获取所有清单"""
+    print("开始获取所有的project")
+    start_time = time.time()
     r = session.get("https://api.dida365.com/api/v2/projects", headers=headers)
+    utils.log_request_duration("获取所有的project", start_time)
     if r.ok:
         # 获取映射关系
         d = notion_helper.get_property_type(notion_helper.project_database_id)
@@ -137,6 +144,8 @@ def remove_duplicates(data):
 
 def get_all_completed(session):
     """获取所有完成的任务"""
+    print("开始获取所有完成的任务")
+    start_time = time.time()
     date = pendulum.now()
     result = []
     while True:
@@ -156,12 +165,16 @@ def get_all_completed(session):
         else:
             print(f"获取任务失败 {r.text}")
     result = remove_duplicates(result)
+    utils.log_request_duration("获取所有完成的任务", start_time)
     return result
 
 
 def get_all_task(session):
     """获取所有未完成的任务"""
+    print("开始获取所有未完成的任务")
+    start_time = time.time()
     r = session.get("https://api.dida365.com/api/v2/batch/check/0", headers=headers)
+    utils.log_request_duration("获取所有未完成的任务", start_time)
     results = []
     if r.ok:
         results.extend(r.json().get("syncTaskBean").get("update"))
@@ -177,7 +190,7 @@ def get_task(session):
     return results
 
 
-def add_task_to_notion(items, project_dict, todo_dict, config, session, page_id=None):
+def add_task_to_notion(items, project_dict, todo_dict, session, page_id=None):
     d = notion_helper.get_property_type(notion_helper.todo_database_id)
     items = list(filter(lambda item: is_task_modified(item, todo_dict), items))
     for index, item in enumerate(items):
@@ -264,39 +277,128 @@ def add_task_to_notion(items, project_dict, todo_dict, config, session, page_id=
         todo_dict[id] = result
         if item.get("content"):
             blocks = (
-                convert_to_block(id, item.get("projectId"), item.get("content"), config,session)
+                convert_to_block(id, item.get("projectId"), item.get("content"),session)
                 + blocks
             )
         if blocks:
             append_block(result.get("id"), blocks)
         if item.get("items"):
-            add_task_to_notion(item.get("items"),project_dict, todo_dict, config, session, result.get("id"))
+            add_task_to_notion(item.get("items"),project_dict, todo_dict, session, result.get("id"))
 
 
-def convert_to_block(id, project_id, content, config, session):
-    blocks = mistletoe.markdown(content, NotionPyRenderer)
-    is_upload = config["上传图片到Github"]
-    if not is_upload:
-        blocks = [block for block in blocks if block.get("type") != "image"]
-        return blocks
-    for block in blocks:
-        if block.get("type") == "image":
-            url = block.get("image").get("external").get("url")
-            urls = url.split("/")
-            dir = urls[0]
-            file_name = urls[1]
-            url = f"https://api.dida365.com/api/v1/attachment/{project_id}/{id}/{dir}?action=download"
-            response = session.get(url, headers=headers)
-            if response.status_code == 200:
-                file_path = os.path.join("images", dir, file_name)  # 组合完整文件路径
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)  # 创建目录
-                with open(file_path, "wb") as file:
-                    file.write(response.content)
-                print("文件下载成功")
-                image_url = f"https://raw.githubusercontent.com/{os.getenv('REPOSITORY')}/{os.getenv('REF').split('/')[-1]}/{file_path}"
-                block["image"]["external"]["url"] = image_url
+def convert_to_block(id, project_id, content, session):
+    action = "Markdown转换为Notion block"
+    print(f"开始{action}")
+    start_time = time.time()
+    blocks = []
+    try:
+        response = requests.post(
+            "http://127.0.0.1:8787",
+            data=content.encode("utf-8"),
+            headers={"content-type": "text/markdown"},
+            timeout=30,
+        )
+        if response.ok:
+            blocks = response.json()
+        else:
+            print(f"{action}失败，状态码: {response.status_code}, 内容: {response.text}")
+    except Exception as exc:
+        print(f"{action}异常: {exc}")
+    utils.log_request_duration(action, start_time)
+    if not blocks:
+        blocks = mistletoe.markdown(content, NotionPyRenderer)
+
+    def upload_file_to_notion(file_name, file_content, content_type):
+        file_size = len(file_content)
+        if file_size == 0:
+            print("文件内容为空，跳过上传")
+            return None
+        try:
+            if file_size <= 20 * 1024 * 1024:
+                response = notion_helper.client.file_uploads.create(
+                    mode="simple",
+                    filename=file_name,
+                    content_type=content_type,
+                )
+                file_upload_id = response.get("id")
+                notion_helper.client.file_uploads.send(
+                    file_upload_id=file_upload_id,
+                    file=(file_name, file_content, content_type),
+                )
             else:
-                print(f"文件下载失败，状态码: {response.status_code}")
+                part_size = 10 * 1024 * 1024
+                number_of_parts = math.ceil(file_size / part_size)
+                response = notion_helper.client.file_uploads.create(
+                    mode="multi_part",
+                    filename=file_name,
+                    content_type=content_type,
+                    number_of_parts=number_of_parts,
+                )
+                file_upload_id = response.get("id")
+                for part_index in range(number_of_parts):
+                    start = part_index * part_size
+                    end = start + part_size
+                    chunk = file_content[start:end]
+                    notion_helper.client.file_uploads.send(
+                        file_upload_id=file_upload_id,
+                        file=(file_name, chunk, content_type),
+                        part_number=str(part_index + 1),
+                    )
+
+            complete_response = notion_helper.client.file_uploads.complete(
+                file_upload_id=file_upload_id
+            )
+            if complete_response.get("status") != "uploaded":
+                print(f"文件上传Notion失败，状态：{complete_response.get('status')}")
+                return None
+            return file_upload_id
+        except Exception as exc:
+            print(f"上传到Notion失败: {exc}")
+            return None
+
+    def process_image_blocks(block_list):
+        for block in block_list:
+            if block.get("type") == "image":
+                url = block.get("image", {}).get("external", {}).get("url")
+                if not url:
+                    continue
+                parsed_url = urlparse(url)
+                paths = unquote(parsed_url.path).strip("/").split("/")
+                if len(paths) < 2:
+                    continue
+                dir_name = paths[-2]
+                file_name = paths[-1]
+                download_url = f"https://api.dida365.com/api/v1/attachment/{project_id}/{id}/{dir_name}?action=download"
+                action_download = f"下载图片 {download_url}"
+                print(f"开始{action_download}")
+                download_start_time = time.time()
+                response = session.get(download_url, headers=headers)
+                utils.log_request_duration(action_download, download_start_time)
+                if response.status_code == 200:
+                    content_type = (
+                        response.headers.get("Content-Type")
+                        or mimetypes.guess_type(file_name)[0]
+                        or "application/octet-stream"
+                    )
+                    file_upload_id = upload_file_to_notion(
+                        file_name, response.content, content_type
+                    )
+                    if file_upload_id:
+                        image_block = {
+                            "type": "file_upload",
+                            "file_upload": {"id": file_upload_id},
+                        }
+                        caption = block.get("image", {}).get("caption")
+                        if caption:
+                            image_block["caption"] = caption
+                        block["image"] = image_block
+                else:
+                    print(f"文件下载失败，状态码: {response.status_code}")
+            # 递归处理子块中的图片
+            if block.get("children"):
+                process_image_blocks(block.get("children"))
+
+    process_image_blocks(blocks)
     return blocks
 
 
@@ -317,24 +419,8 @@ def append_block(block_id, blocks):
             append_block(id, children)
 
 
-def login(username, password):
-    session = requests.Session()
-    login_url = "https://api.dida365.com/api/v2/user/signon?wc=true&remember=true"
-    payload = {"username": username, "password": password}
-    response = session.post(login_url, json=payload, headers=headers)
-    if response.status_code == 200:
-        print("登录成功")
-        return session
-    else:
-        print(f"登录失败: {response.text}")
-        return None
-
-
 def main():
-    config = notion_helper.config
-    username = config.get("滴答清单账号")
-    password = config.get("滴答清单密码")
-    session = login(username, password)
+    session = requests.Session()
     projects = notion_helper.query_all(notion_helper.project_database_id)
     project_dict = {}
     for item in projects:
@@ -345,7 +431,7 @@ def main():
     for todo in todos:
         todo_dict[utils.get_property_value(todo.get("properties").get("id"))] = todo
     tasks = get_task(session)
-    add_task_to_notion(tasks,project_dict,todo_dict,config,session)
+    add_task_to_notion(tasks,project_dict,todo_dict,session)
 
 
 notion_helper = NotionHelper()

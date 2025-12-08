@@ -19,10 +19,12 @@ headers = {
     "x-csrftoken": "GpesKselqEa9oKJQRM3bj8tkdT2kJVNSNaZ9eM0i3Q-1730258339",
     "x-device": '{"platform":"web","os":"macOS 10.15.7","device":"Chrome 141.0.0.0","name":"","version":6101,"id":"689e9fa68d521b4a0abec2cb","channel":"website","campaign":"","websocket":""}',
     "x-tz": "Asia/Shanghai",
+    
 }
 if __name__ == "__main__":
     session = requests.Session()
     login_url = "https://api.dida365.com/api/v2/user/signon?wc=true&remember=true"
+    # login_url = "https://api.dida365.com/pub/captcha"
     payload = {"username": "18611145755", "password": "DFitness@7"}
     response = session.post(login_url, json=payload, headers=headers)
     print(response.status_code)

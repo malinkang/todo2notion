@@ -1,11 +1,13 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
 import argparse
+import io
 import json
 import math
 import mimetypes
 import os
 import time
+from typing import List
 from urllib.parse import unquote, urlparse
 
 import pendulum
@@ -185,7 +187,8 @@ def get_all_task(session):
 
 def get_task(session):
     """获取所有清单"""
-    results = get_all_completed(session)
+    # results = get_all_completed(session)
+    results = []
     results.extend(get_all_task(session))
     return results
 
@@ -287,6 +290,8 @@ def add_task_to_notion(items, project_dict, todo_dict, session, page_id=None):
 
 
 def convert_to_block(id, project_id, content, session):
+    with open("debug_markdown.md", "w", encoding="utf-8") as f:
+        f.write(content)
     action = "Markdown转换为Notion block"
     print(f"开始{action}")
     start_time = time.time()
@@ -299,99 +304,90 @@ def convert_to_block(id, project_id, content, session):
             timeout=30,
         )
         if response.ok:
-            blocks = response.json()
+            blocks = response.json().get("blocks", [])
         else:
             print(f"{action}失败，状态码: {response.status_code}, 内容: {response.text}")
     except Exception as exc:
         print(f"{action}异常: {exc}")
     utils.log_request_duration(action, start_time)
-    if not blocks:
-        blocks = mistletoe.markdown(content, NotionPyRenderer)
 
-    def upload_file_to_notion(file_name, file_content, content_type):
+    def upload_file_to_notion(file_name, file_content):
         file_size = len(file_content)
         if file_size == 0:
             print("文件内容为空，跳过上传")
             return None
-        try:
-            if file_size <= 20 * 1024 * 1024:
-                response = notion_helper.client.file_uploads.create(
-                    mode="simple",
+        file_uploads_endpoint = getattr(notion_helper.client, "file_uploads", None)
+        if file_uploads_endpoint:
+            file_size = len(response.content)
+            with open("debug_downloaded_file", "wb") as f:
+                f.write(response.content)
+            print(f"上传Notion文件，文件名: {file_name}, 大小: {file_size} 字节")
+            if file_size > 20 * 1024 * 1024:
+                pass  # Notion SDK目前不支持大于20MB的文件上传
+            try:
+                create_resp = file_uploads_endpoint.create(
+                    mode="single_part",
                     filename=file_name,
-                    content_type=content_type,
                 )
-                file_upload_id = response.get("id")
-                notion_helper.client.file_uploads.send(
+                file_upload_id = create_resp.get("id")
+                print(f"创建文件上传，文件ID: {file_upload_id}")
+                file_like = io.BytesIO(file_content)
+                file_like.name = file_name  # type: ignore[attr-defined]
+                file_like.seek(0)
+                send_resp = file_uploads_endpoint.send(
                     file_upload_id=file_upload_id,
-                    file=(file_name, file_content, content_type),
+                    file=file_like,
                 )
-            else:
-                part_size = 10 * 1024 * 1024
-                number_of_parts = math.ceil(file_size / part_size)
-                response = notion_helper.client.file_uploads.create(
-                    mode="multi_part",
-                    filename=file_name,
-                    content_type=content_type,
-                    number_of_parts=number_of_parts,
-                )
-                file_upload_id = response.get("id")
-                for part_index in range(number_of_parts):
-                    start = part_index * part_size
-                    end = start + part_size
-                    chunk = file_content[start:end]
-                    notion_helper.client.file_uploads.send(
-                        file_upload_id=file_upload_id,
-                        file=(file_name, chunk, content_type),
-                        part_number=str(part_index + 1),
+                print(f"发送文件上传，响应状态: {send_resp.get('status')}")
+                if send_resp.get("status") != "uploaded":
+                    raise Exception(
+                        f"File upload failed with status: {send_resp.get('status')}"
                     )
 
-            complete_response = notion_helper.client.file_uploads.complete(
-                file_upload_id=file_upload_id
-            )
-            if complete_response.get("status") != "uploaded":
-                print(f"文件上传Notion失败，状态：{complete_response.get('status')}")
+                return file_upload_id
+            except Exception as exc:
+                print(f"上传Notion文件异常: {exc}")
                 return None
-            return file_upload_id
-        except Exception as exc:
-            print(f"上传到Notion失败: {exc}")
-            return None
 
     def process_image_blocks(block_list):
         for block in block_list:
-            if block.get("type") == "image":
-                url = block.get("image", {}).get("external", {}).get("url")
+            type = block.get("type")
+            if type == "image" or type == "file":
+                url = block.get(type, {}).get("external", {}).get("url")
                 if not url:
                     continue
                 parsed_url = urlparse(url)
                 paths = unquote(parsed_url.path).strip("/").split("/")
                 if len(paths) < 2:
                     continue
+                print(f"处理图片块，Url: {paths}")
                 dir_name = paths[-2]
                 file_name = paths[-1]
+                print(f"处理图片块，文件名: {mimetypes.guess_type(file_name)[0]}")
                 download_url = f"https://api.dida365.com/api/v1/attachment/{project_id}/{id}/{dir_name}?action=download"
                 action_download = f"下载图片 {download_url}"
                 print(f"开始{action_download}")
                 download_start_time = time.time()
                 response = session.get(download_url, headers=headers)
+                print(f"完成{action_download} {response.status_code} ")
+                with open("debug_downloaded_image.png", "wb") as f:
+                    f.write(response.content)
                 utils.log_request_duration(action_download, download_start_time)
                 if response.status_code == 200:
-                    content_type = (
-                        response.headers.get("Content-Type")
-                        or mimetypes.guess_type(file_name)[0]
-                        or "application/octet-stream"
-                    )
                     file_upload_id = upload_file_to_notion(
-                        file_name, response.content, content_type
+                        file_name, response.content
                     )
+                    print(f"上传Notion文件，文件ID: {file_upload_id}")
                     if file_upload_id:
                         image_block = {
                             "type": "file_upload",
                             "file_upload": {"id": file_upload_id},
                         }
-                        caption = block.get("image", {}).get("caption")
+                        caption = block.get(type, {}).get("caption")
                         if caption:
                             image_block["caption"] = caption
-                        block["image"] = image_block
+                        print(f"更新图片块链接，文件ID: {image_block}")
+                        block[type] = image_block
                 else:
                     print(f"文件下载失败，状态码: {response.status_code}")
             # 递归处理子块中的图片
@@ -399,15 +395,24 @@ def convert_to_block(id, project_id, content, session):
                 process_image_blocks(block.get("children"))
 
     process_image_blocks(blocks)
+    with open("debug_notion_blocks.json", "w", encoding="utf-8") as f:
+        json.dump(blocks, f, ensure_ascii=False, indent=4)
     return blocks
 
 
 
 def append_block(block_id, blocks):
     for block in blocks:
-        children = None
-        if block.get("children"):
-            children = block.pop("children")
+        children = []
+        # Some renderers put nested blocks at the root level, others under the typed payload
+        root_children = block.pop("children", None)
+        if root_children:
+            children.extend(root_children if isinstance(root_children, list) else [root_children])
+        type_key = block.get("type")
+        if type_key:
+            type_children = block.get(type_key, {}).pop("children", None)
+            if type_children:
+                children.extend(type_children if isinstance(type_children, list) else [type_children])
         id = (
             notion_helper.client.blocks.children.append(
                 block_id=block_id, children=[block]
